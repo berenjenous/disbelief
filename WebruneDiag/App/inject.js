@@ -2,6 +2,35 @@
 (function () {
   if (window.__diagInstalled) return;
   window.__diagInstalled = true;
+
+  // FIX: WebRune (Kotlin/JS) closes OPFS directory iterators by calling
+  // iterator.return() or iterator[Symbol.asyncDispose](). Safari has neither,
+  // so WebRune throws NoSuchElementException and stays on "LOADING".
+  // Add a no-op return()/asyncDispose to the directory-iterator prototype.
+  (function patchDirIterators() {
+    try {
+      if (!(navigator.storage && navigator.storage.getDirectory)) return;
+      navigator.storage.getDirectory().then(function (root) {
+        ["entries", "values", "keys"].forEach(function (m) {
+          if (typeof root[m] !== "function") return;
+          var proto = Object.getPrototypeOf(root[m]());
+          if (typeof proto.return !== "function") {
+            Object.defineProperty(proto, "return", {
+              configurable: true, writable: true,
+              value: function (v) { return Promise.resolve({ done: true, value: v }); }
+            });
+          }
+          if (typeof Symbol.asyncDispose === "symbol" && typeof proto[Symbol.asyncDispose] !== "function") {
+            Object.defineProperty(proto, Symbol.asyncDispose, {
+              configurable: true, writable: true,
+              value: function () { return Promise.resolve(); }
+            });
+          }
+        });
+        try { window.webkit.messageHandlers.diag.postMessage({ level: "fix", msg: "OPFS iterator patch applied in " + location.pathname }); } catch (e) {}
+      });
+    } catch (e) {}
+  })();
   var where = (window === window.top ? "main" : "iframe") + " " + location.pathname;
   function send(level, msg) {
     try { window.webkit.messageHandlers.diag.postMessage({ level: level, msg: String(msg) }); } catch (e) {}
